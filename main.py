@@ -24,7 +24,8 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # MongoDB setup
 def initialize_mongodb():
     """Initialize MongoDB connection."""
-    try:, "mongodb+srv://dalal:Hjeh3T3ZibiN8IiX@cluster0.cqll1b7.mongodb.net/current_affairs_db?retryWrites=true&w=majority")
+    try:
+        mongo_uri = os.getenv('MONGO_URI')
         if not mongo_uri:
             raise ValueError("MONGO_URI environment variable not set.")
         client = MongoClient(mongo_uri)
@@ -39,6 +40,7 @@ def initialize_mongodb():
     except Exception as e:
         logging.error(f"MongoDB initialization error: {e}")
         return None
+
 
 # Firebase initialization
 def initialize_firebase():
