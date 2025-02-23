@@ -32,7 +32,6 @@ jobs:
         DB_NAME: ${{ secrets.DB_NAME }}
         FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
         FCM_NOTIFICATION_TOPIC: ${{ secrets.FCM_NOTIFICATION_TOPIC }}
+        MONGO_URI: ${{ secrets.MONGO_URI }}
       run: |
-        python main.py # Replace with your script filename
-
-   
+        python main.py
