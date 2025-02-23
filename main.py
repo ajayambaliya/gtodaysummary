@@ -34,10 +34,8 @@ def initialize_mongodb():
         logging.info("MongoDB initialized successfully")
         return collection
     except ConnectionFailure as e:
-        logging.error(f"MongoDB connection failed: {e}")
         return None
     except Exception as e:
-        logging.error(f"MongoDB initialization error: {e}")
         return None
 
 # Firebase initialization
