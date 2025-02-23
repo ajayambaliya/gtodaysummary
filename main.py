@@ -10,7 +10,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from mysql.connector import Error
 from bs4 import BeautifulSoup
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 from deep_translator import GoogleTranslator, MyMemoryTranslator
 from googletrans import Translator
 import firebase_admin
