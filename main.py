@@ -10,20 +10,40 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from mysql.connector import Error
 from bs4 import BeautifulSoup
-from datetime import datetime
+from datetime import datetime, UTC
 from deep_translator import GoogleTranslator, MyMemoryTranslator
 from googletrans import Translator
 import firebase_admin
 from firebase_admin import credentials, messaging
+from pymongo import MongoClient
+from pymongo.errors import ConnectionFailure
 
 # Get the absolute path of the script directory
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Firebase initialization with robust credential handling
+# MongoDB setup
+def initialize_mongodb():
+    """Initialize MongoDB connection."""
+    try:, "mongodb+srv://dalal:Hjeh3T3ZibiN8IiX@cluster0.cqll1b7.mongodb.net/current_affairs_db?retryWrites=true&w=majority")
+        if not mongo_uri:
+            raise ValueError("MONGO_URI environment variable not set.")
+        client = MongoClient(mongo_uri)
+        client.admin.command('ping')
+        db = client['current_affairs_db']
+        collection = db['scraped_urls']
+        logging.info("MongoDB initialized successfully")
+        return collection
+    except ConnectionFailure as e:
+        logging.error(f"MongoDB connection failed: {e}")
+        return None
+    except Exception as e:
+        logging.error(f"MongoDB initialization error: {e}")
+        return None
+
+# Firebase initialization
 def initialize_firebase():
     """Initialize Firebase with credentials from environment variable or file."""
     try:
-        # Expect FIREBASE_SERVICE_ACCOUNT_JSON as a secret containing the full JSON content
         service_account_json = os.getenv('FIREBASE_SERVICE_ACCOUNT_JSON')
         if service_account_json:
             cred_dict = json.loads(service_account_json)
@@ -32,7 +52,6 @@ def initialize_firebase():
             logging.info("Firebase initialized with service account JSON from environment")
             return True
 
-        # Fallback to file-based approach if JSON not provided
         service_account_path = os.getenv('FIREBASE_SERVICE_ACCOUNT_PATH', 'service-account.json')
         path = os.path.join(SCRIPT_DIR, service_account_path) if not os.path.isabs(service_account_path) else service_account_path
         if os.path.exists(path):
@@ -48,7 +67,7 @@ def initialize_firebase():
 
 # Send Firebase notification
 def send_firebase_notification(news_title, post_id):
-    current_date = datetime.now().strftime('%d %b')  # e.g., "23 Feb"
+    current_date = datetime.now().strftime('%d %b')
     base_title = f"{current_date} CA Summary"
     
     catchy_phrases = [
@@ -89,7 +108,7 @@ def send_firebase_notification(news_title, post_id):
         logging.error(f"Failed to send notification: {e}")
         return False
 
-# Database configuration from environment variables
+# Database configuration
 DB_CONFIG = {
     'host': os.getenv('DB_HOST'),
     'user': os.getenv('DB_USER'),
@@ -151,6 +170,32 @@ def insert_news(connection, cat_id, news_title, news_description, news_image):
         logging.error(f"Database error: {err}")
         return False, None
 
+def log_url_to_mongodb(collection, url, status="scraped"):
+    """Log URL to MongoDB with status and timestamp."""
+    try:
+        if collection is not None:
+            document = {
+                "url": url,
+                "status": status,
+                "timestamp": datetime.now(UTC)
+            }
+            collection.insert_one(document)
+            logging.info(f"Logged URL to MongoDB: {url} with status {status}")
+    except Exception as e:
+        logging.error(f"Failed to log URL to MongoDB: {e}")
+
+def is_url_scraped(collection, url):
+    """Check if URL has been scraped before."""
+    try:
+        if collection is not None:
+            result = collection.find_one({"url": url})
+            logging.debug(f"Checking URL {url} in MongoDB: {'Found' if result else 'Not found'}")
+            return result is not None
+        return False
+    except Exception as e:
+        logging.error(f"Error checking URL in MongoDB: {e}")
+        return False
+
 class CurrentAffairsScraper:
     def __init__(self):
         self.connection = mysql.connector.connect(**DB_CONFIG)
@@ -158,8 +203,11 @@ class CurrentAffairsScraper:
         self.requests = RequestsWithRetry()
         self.translation_retries = 3
         self.retry_delay = 1
+        self.mongodb_collection = initialize_mongodb()
         if not initialize_firebase():
             logging.error("Firebase initialization failed. Notifications will not be sent.")
+        if self.mongodb_collection is None:
+            logging.error("MongoDB initialization failed. Duplicate checking will be disabled.")
 
     def clean_text(self, text):
         return re.sub(r'\s+', ' ', text).strip()
@@ -189,18 +237,30 @@ class CurrentAffairsScraper:
         retry_delay = 3
         for attempt in range(max_retries):
             try:
+                logging.debug(f"Fetching URL: {page_url}")
                 response = self.requests.get(page_url)
+                response.raise_for_status()
                 soup = BeautifulSoup(response.content, 'html.parser')
-                articles = soup.find_all('h1', id='list')
+                articles = soup.find_all('h1', id='list')  # Reverted to old working method
                 urls = [a.find('a')['href'] for a in articles if a.find('a')]
+                logging.debug(f"Raw URLs found on {page_url}: {urls}")
+                
+                # Filter out already scraped URLs
+                if self.mongodb_collection is not None:
+                    new_urls = [url for url in urls if not is_url_scraped(self.mongodb_collection, url)]
+                    logging.info(f"After filtering, {len(new_urls)} new URLs remain on {page_url}: {new_urls}")
+                    return new_urls
                 return urls
-            except Exception as e:
+            except requests.RequestException as e:
                 if attempt < max_retries - 1:
                     logging.warning(f"Attempt {attempt + 1} failed for {page_url}: {e}")
                     time.sleep(retry_delay)
                 else:
                     logging.error(f"Failed to fetch URLs after {max_retries} attempts: {e}")
                     return []
+            except Exception as e:
+                logging.error(f"Unexpected error fetching {page_url}: {e}")
+                return []
 
     def extract_content(self, article_urls):
         articles_data = []
@@ -240,6 +300,7 @@ class CurrentAffairsScraper:
                     continue
                 
                 articles_data.append((original_title, original_paragraph, gujarati_title, gujarati_paragraph))
+                log_url_to_mongodb(self.mongodb_collection, article_url, status="scraped")
                 logging.info(f"Successfully processed article {index}/{total_urls}")
                 time.sleep(1)
             except Exception as e:
@@ -419,16 +480,15 @@ class CurrentAffairsScraper:
         try:
             base_url = "https://www.gktoday.in/current-affairs/"
             page_number = 1
-            max_pages = 2
+            max_pages = 4
             all_urls = []
             
             while page_number <= max_pages:
                 page_url = f"{base_url}page/{page_number}/"
                 article_urls = self.get_article_urls(page_url)
-                if not article_urls:
-                    break
-                logging.info(f"Found {len(article_urls)} articles on page {page_number}")
-                all_urls.extend(article_urls)
+                logging.info(f"Processed page {page_number}/{max_pages}")
+                if article_urls:
+                    all_urls.extend(article_urls)
                 page_number += 1
                 time.sleep(1)
             
@@ -453,6 +513,8 @@ class CurrentAffairsScraper:
                         logging.info(f"Successfully created post for {current_date} with ID: {news_id}")
                         if send_firebase_notification(news_title, news_id):
                             logging.info("Notification sent successfully")
+                            for url in all_urls:
+                                log_url_to_mongodb(self.mongodb_collection, url, status="sent")
                         else:
                             logging.warning("Notification failed to send")
                     else:
@@ -460,7 +522,7 @@ class CurrentAffairsScraper:
                 else:
                     logging.error("Insufficient translated articles")
             else:
-                logging.warning("No articles found")
+                logging.warning("No new articles found to process across all pages")
                 
         except Exception as e:
             logging.error(f"Main execution error: {e}")
@@ -470,7 +532,7 @@ class CurrentAffairsScraper:
 
 if __name__ == "__main__":
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG,  # Keep DEBUG level for troubleshooting
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
     scraper = CurrentAffairsScraper()
