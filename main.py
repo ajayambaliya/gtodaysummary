@@ -24,7 +24,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # MongoDB setup
 def initialize_mongodb():
     try:
-        mongo_uri = os.getenv('MONGO_URI', "mongodb+srv://dalal:Hjeh3T3ZibiN8IiX@cluster0.cqll1b7.mongodb.net/current_affairs_db?retryWrites=true&w=majority")
+        mongo_uri = os.getenv('MONGO_URI')
         if not mongo_uri:
             raise ValueError("MONGO_URI environment variable not set.")
         client = MongoClient(mongo_uri)
@@ -110,10 +110,10 @@ def send_firebase_notification(news_title, post_id):
 
 # Database configuration
 DB_CONFIG = {
-    'host': '191.101.230.154',
-    'user': 'u983304183_currentadmin',
-    'password': 'Ajahir@1308',
-    'database': 'u983304183_current'
+    'host': os.getenv('DB_HOST'),
+    'user': os.getenv('DB_USER'),
+    'password': os.getenv('DB_PASSWORD'),
+    'database': os.getenv('DB_NAME')
 }
 
 class RequestsWithRetry:
@@ -148,7 +148,7 @@ def check_and_reconnect(connection):
 
 def insert_news(connection, cat_id, news_title, news_description, news_image):
     current_date = datetime.now().strftime('%d %B %Y')
-    news_image_filename = f"{current_date}.png"
+    news_image_filename = f"{current_date} Summary.jpg"
     query = """
     INSERT INTO tbl_news (cat_id, news_title, news_date, news_description, news_image, 
                          news_status, video_url, video_id, content_type, size, view_count, last_update)
@@ -157,7 +157,7 @@ def insert_news(connection, cat_id, news_title, news_description, news_image):
     current_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     data = (
         cat_id, news_title, current_timestamp, news_description, news_image_filename,
-        1, "", "", "Post", "", 0, current_timestamp
+        11, "", "", "Post", "", 0, current_timestamp
     )
     
     try:
