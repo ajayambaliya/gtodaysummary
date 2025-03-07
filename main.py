@@ -10,7 +10,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from mysql.connector import Error
 from bs4 import BeautifulSoup
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from deep_translator import GoogleTranslator, MyMemoryTranslator
 from googletrans import Translator
 import firebase_admin
@@ -24,15 +24,20 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # MongoDB setup
 def initialize_mongodb():
     try:
-        mongo_uri = os.getenv('MONGO_URI')
+        mongo_uri = os.getenv('MONGO_URI', "mongodb+srv://dalal:Hjeh3T3ZibiN8IiX@cluster0.cqll1b7.mongodb.net/current_affairs_db?retryWrites=true&w=majority")
         if not mongo_uri:
             raise ValueError("MONGO_URI environment variable not set.")
         client = MongoClient(mongo_uri)
         client.admin.command('ping')
         db = client['current_affairs_db']
         collection = db['scraped_urls']
+        logging.info("MongoDB initialized successfully")
         return collection
-    except (ConnectionFailure, Exception):
+    except ConnectionFailure as e:
+        logging.error(f"MongoDB connection failed: {e}")
+        return None
+    except Exception as e:
+        logging.error(f"MongoDB initialization error: {e}")
         return None
 
 # Firebase initialization
@@ -43,6 +48,7 @@ def initialize_firebase():
             cred_dict = json.loads(service_account_json)
             cred = credentials.Certificate(cred_dict)
             firebase_admin.initialize_app(cred)
+            logging.info("Firebase initialized with service account JSON from environment")
             return True
 
         service_account_path = os.getenv('FIREBASE_SERVICE_ACCOUNT_PATH', 'service-account.json')
@@ -50,10 +56,12 @@ def initialize_firebase():
         if os.path.exists(path):
             cred = credentials.Certificate(path)
             firebase_admin.initialize_app(cred)
+            logging.info(f"Firebase initialized with service account at: {path}")
             return True
 
         raise ValueError("No valid Firebase credentials found.")
-    except Exception:
+    except Exception as e:
+        logging.error(f"Firebase initialization error: {e}")
         return False
 
 # Send Firebase notification
@@ -79,6 +87,7 @@ def send_firebase_notification(news_title, post_id):
     
     try:
         topic = os.getenv('FCM_NOTIFICATION_TOPIC', 'android_news_app_topic')
+        logging.info(f"Sending notification to topic: {topic}")
         
         message = messaging.Message(
             notification=messaging.Notification(
@@ -93,18 +102,18 @@ def send_firebase_notification(news_title, post_id):
             topic=topic
         )
         response = messaging.send(message)
-        print(f"Notification sent successfully. Message ID: {response}")
+        logging.info(f"Notification sent successfully. Message ID: {response}")
         return True
     except Exception as e:
-        print(f"Failed to send notification: {e}")
+        logging.error(f"Failed to send notification: {e}")
         return False
 
 # Database configuration
 DB_CONFIG = {
-    'host': os.getenv('DB_HOST'),
-    'user': os.getenv('DB_USER'),
-    'password': os.getenv('DB_PASSWORD'),
-    'database': os.getenv('DB_NAME')
+    'host': '191.101.230.154',
+    'user': 'u983304183_currentadmin',
+    'password': 'Ajahir@1308',
+    'database': 'u983304183_current'
 }
 
 class RequestsWithRetry:
@@ -127,14 +136,14 @@ class RequestsWithRetry:
 def check_and_reconnect(connection):
     try:
         if connection and connection.is_connected():
-            print("Database connection is active")
+            logging.info("Database connection is active")
             return connection
-        print(f"Attempting to connect to database with host: {DB_CONFIG['host']}, user: {DB_CONFIG['user']}, database: {DB_CONFIG['database']}")
+        logging.info(f"Attempting to connect to database with host: {DB_CONFIG['host']}, user: {DB_CONFIG['user']}, database: {DB_CONFIG['database']}")
         new_connection = mysql.connector.connect(**DB_CONFIG)
-        print("Successfully connected to database")
+        logging.info("Successfully connected to database")
         return new_connection
     except Error as e:
-        print(f"Database connection failed: {e}")
+        logging.error(f"Database connection failed: {e}")
         return None
 
 def insert_news(connection, cat_id, news_title, news_description, news_image):
@@ -154,24 +163,24 @@ def insert_news(connection, cat_id, news_title, news_description, news_image):
     try:
         connection = check_and_reconnect(connection)
         if connection:
-            print(f"Attempting to insert news: {news_title[:50]}... (ID will be generated)")
+            logging.info(f"Attempting to insert news: {news_title[:50]}... (ID will be generated)")
             cursor = connection.cursor()
             cursor.execute(query, data)
             connection.commit()
             news_id = cursor.lastrowid
             cursor.close()
-            print(f"News inserted successfully with ID: {news_id}")
+            logging.info(f"News inserted successfully with ID: {news_id}")
             return True, news_id
         else:
-            print("No database connection available, insertion skipped")
+            logging.error("No database connection available, insertion skipped")
             return False, None
     except mysql.connector.Error as err:
-        print(f"Database insertion failed: {err}")
-        print(f"Query: {query}")
-        print(f"Data: {data}")
+        logging.error(f"Database insertion failed: {err}")
+        logging.error(f"Query: {query}")
+        logging.error(f"Data: {data}")
         return False, None
     except Exception as e:
-        print(f"Unexpected error during insertion: {e}")
+        logging.error(f"Unexpected error during insertion: {e}")
         return False, None
 
 def log_url_to_mongodb(collection, url, status="scraped"):
@@ -180,30 +189,43 @@ def log_url_to_mongodb(collection, url, status="scraped"):
             document = {
                 "url": url,
                 "status": status,
-                "timestamp": datetime.now(timezone.utc)
+                "timestamp": datetime.now(UTC)
             }
             collection.insert_one(document)
-    except Exception:
-        pass
+            logging.info(f"Logged URL to MongoDB: {url} with status {status}")
+    except Exception as e:
+        logging.error(f"Failed to log URL to MongoDB: {e}")
 
 def is_url_scraped(collection, url):
     try:
         if collection is not None:
             result = collection.find_one({"url": url})
+            logging.debug(f"Checking URL {url} in MongoDB: {'Found' if result else 'Not found'}")
             return result is not None
         return False
-    except Exception:
+    except Exception as e:
+        logging.error(f"Error checking URL in MongoDB: {e}")
         return False
 
 class CurrentAffairsScraper:
     def __init__(self):
-        self.connection = mysql.connector.connect(**DB_CONFIG)
+        try:
+            logging.info(f"Attempting initial database connection with host: {DB_CONFIG['host']}, user: {DB_CONFIG['user']}, database: {DB_CONFIG['database']}")
+            self.connection = mysql.connector.connect(**DB_CONFIG)
+            logging.info("Initial database connection successful")
+        except Error as e:
+            logging.error(f"Initial database connection failed: {e}")
+            self.connection = None
+        
         self.cat_id = 1
         self.requests = RequestsWithRetry()
         self.translation_retries = 3
         self.retry_delay = 1
         self.mongodb_collection = initialize_mongodb()
-        initialize_firebase()
+        if not initialize_firebase():
+            logging.error("Firebase initialization failed. Notifications will not be sent.")
+        if self.mongodb_collection is None:
+            logging.error("MongoDB initialization failed. Duplicate checking will be disabled.")
 
     def clean_text(self, text):
         return re.sub(r'\s+', ' ', text).strip()
@@ -212,18 +234,23 @@ class CurrentAffairsScraper:
         for attempt in range(self.translation_retries):
             try:
                 translated_text = GoogleTranslator(source='en', target='gu').translate(text)
+                logging.debug(f"Translation successful for text: {text[:50]}... (using GoogleTranslator)")
                 return True, translated_text
             except Exception:
                 try:
                     translated_text = MyMemoryTranslator(source='en', target='gu').translate(text)
+                    logging.debug(f"Translation successful for text: {text[:50]}... (using MyMemoryTranslator)")
                     return True, translated_text
                 except Exception:
                     try:
                         translator = Translator()
                         translated_text = translator.translate(text, src='en', dest='gu').text
+                        logging.debug(f"Translation successful for text: {text[:50]}... (using googletrans)")
                         return True, translated_text
-                    except Exception:
+                    except Exception as e:
+                        logging.warning(f"Translation attempt {attempt + 1} failed: {e}")
                         time.sleep(self.retry_delay)
+        logging.error(f"Translation failed after {self.translation_retries} attempts for text: {text[:50]}...")
         return False, ""
 
     def get_article_urls(self, page_url):
@@ -231,73 +258,77 @@ class CurrentAffairsScraper:
         retry_delay = 3
         for attempt in range(max_retries):
             try:
+                logging.debug(f"Fetching URL: {page_url}")
                 response = self.requests.get(page_url)
                 response.raise_for_status()
                 soup = BeautifulSoup(response.content, 'html.parser')
                 articles = soup.find_all('h1', id='list')
                 urls = [a.find('a')['href'] for a in articles if a.find('a')]
-                print(f"Found {len(urls)} URLs on page: {page_url}")
+                logging.debug(f"Raw URLs found on {page_url}: {urls}")
+                logging.info(f"Found {len(urls)} URLs on page: {page_url}")
+                
                 if self.mongodb_collection is not None:
                     new_urls = [url for url in urls if not is_url_scraped(self.mongodb_collection, url)]
-                    print(f"After filtering, {len(new_urls)} new URLs remain on {page_url}")
+                    logging.info(f"After filtering, {len(new_urls)} new URLs remain on {page_url}: {new_urls}")
                     return new_urls
                 return urls
-            except requests.RequestException:
+            except requests.RequestException as e:
                 if attempt < max_retries - 1:
+                    logging.warning(f"Attempt {attempt + 1} failed for {page_url}: {e}")
                     time.sleep(retry_delay)
                 else:
-                    print(f"Failed to fetch URLs from {page_url} after {max_retries} attempts")
+                    logging.error(f"Failed to fetch URLs after {max_retries} attempts: {e}")
                     return []
-            except Exception:
-                print(f"Unexpected error fetching URLs from {page_url}")
+            except Exception as e:
+                logging.error(f"Unexpected error fetching {page_url}: {e}")
                 return []
 
     def extract_content(self, article_urls):
         articles_data = []
         total_urls = len(article_urls)
-        print(f"Starting to process {total_urls} article URLs")
+        logging.info(f"Starting to process {total_urls} article URLs")
         
         for index, article_url in enumerate(article_urls, 1):
+            logging.info(f"Processing article {index}/{total_urls}: {article_url}")
             try:
-                print(f"Processing article {index}/{total_urls}: {article_url}")
                 response = self.requests.get(article_url)
                 soup = BeautifulSoup(response.content, 'html.parser')
                 featured_image_section = soup.find('div', class_='featured_image', style='margin-bottom:-5px;')
                 
                 if not featured_image_section:
-                    print(f"No featured image section found in {article_url}, skipping")
+                    logging.warning(f"No featured image section found in {article_url}, skipping")
                     continue
                 
                 title_element = soup.find('h1', id='list', style="text-align:center; font-size:20px;")
                 if not title_element:
-                    print(f"No title found in {article_url}, skipping")
+                    logging.warning(f"No title found in {article_url}, skipping")
                     continue
                     
                 original_title = self.clean_text(title_element.text)
                 content_element = featured_image_section.find_next('p')
                 if not content_element:
-                    print(f"No content found in {article_url}, skipping")
+                    logging.warning(f"No content found in {article_url}, skipping")
                     continue
                     
                 original_paragraph = self.clean_text(content_element.text)
                 title_success, gujarati_title = self.safe_translate(original_title, is_title=True)
                 if not title_success:
-                    print(f"Failed to translate title for {article_url}, skipping")
+                    logging.error(f"Failed to translate title for article {index}: {article_url}")
                     continue
                 
                 para_success, gujarati_paragraph = self.safe_translate(original_paragraph)
                 if not para_success:
-                    print(f"Failed to translate paragraph for {article_url}, skipping")
+                    logging.error(f"Failed to translate paragraph for article {index}: {article_url}")
                     continue
                 
                 articles_data.append((original_title, original_paragraph, gujarati_title, gujarati_paragraph))
                 log_url_to_mongodb(self.mongodb_collection, article_url, status="scraped")
-                print(f"Successfully processed article {index}/{total_urls}")
+                logging.info(f"Successfully processed article {index}/{total_urls}")
                 time.sleep(1)
             except Exception as e:
-                print(f"Failed to process {article_url}: {e}")
+                logging.error(f"Failed to process {article_url}: {e}")
                 continue
-        print(f"Finished processing {len(articles_data)} articles out of {total_urls}")
+        logging.info(f"Finished processing {len(articles_data)} articles out of {total_urls}")
         return articles_data
 
     def format_news_content(self, articles_data):
@@ -458,15 +489,17 @@ class CurrentAffairsScraper:
             max_pages = 4
             all_urls = []
             
+            logging.info("Starting URL collection process")
             while page_number <= max_pages:
                 page_url = f"{base_url}page/{page_number}/"
                 article_urls = self.get_article_urls(page_url)
+                logging.info(f"Processed page {page_number}/{max_pages}")
                 if article_urls:
                     all_urls.extend(article_urls)
                 page_number += 1
                 time.sleep(1)
             
-            print(f"Total unique URLs collected: {len(all_urls)}")
+            logging.info(f"Total unique URLs collected: {len(all_urls)}")
             if all_urls:
                 articles_data = self.extract_content(all_urls)
                 
@@ -484,17 +517,31 @@ class CurrentAffairsScraper:
                     )
                     
                     if success:
-                        send_firebase_notification(news_title, news_id)
-                        for url in all_urls:
-                            log_url_to_mongodb(self.mongodb_collection, url, status="sent")
+                        logging.info(f"Successfully created post for {current_date} with ID: {news_id}")
+                        if send_firebase_notification(news_title, news_id):
+                            logging.info("Notification sent successfully")
+                            for url in all_urls:
+                                log_url_to_mongodb(self.mongodb_collection, url, status="sent")
+                        else:
+                            logging.warning("Notification failed to send")
+                    else:
+                        logging.error(f"Failed to create post for {current_date}")
+                else:
+                    logging.error("Insufficient translated articles")
+            else:
+                logging.warning("No new articles found to process across all pages")
+                
         except Exception as e:
-            print(f"Main execution error: {e}")
+            logging.error(f"Main execution error: {e}")
         finally:
             if self.connection:
                 self.connection.close()
-                print("Database connection closed")
+                logging.info("Database connection closed")
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
     scraper = CurrentAffairsScraper()
     scraper.main()
