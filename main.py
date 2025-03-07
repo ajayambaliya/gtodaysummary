@@ -146,7 +146,7 @@ def check_and_reconnect(connection):
 
 def insert_news(connection, cat_id, news_title, news_description, news_image):
     current_date = datetime.now().strftime('%d %B %Y')
-    news_image_filename = f"{current_date}.png"
+    news_image_filename = f"{current_date} Summary.jpg"
     query = """
     INSERT INTO tbl_news (cat_id, news_title, news_date, news_description, news_image, 
                          news_status, video_url, video_id, content_type, size, view_count, last_update)
@@ -155,7 +155,7 @@ def insert_news(connection, cat_id, news_title, news_description, news_image):
     current_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     data = (
         cat_id, news_title, current_timestamp, news_description, news_image_filename,
-        1, "", "", "Post", "", 0, current_timestamp
+        11, "", "", "Post", "", 0, current_timestamp
     )
     
     try:
