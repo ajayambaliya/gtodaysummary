@@ -59,7 +59,7 @@ def initialize_firebase():
 # Send Firebase notification
 def send_firebase_notification(news_title, post_id):
     current_date = datetime.now().strftime('%d %b')
-    base_title = f"{current_date} Summary.jpg"
+    base_title = f"{current_date} CA Summary"
     
     catchy_phrases = [
         " - Hot Updates Await!",
@@ -129,7 +129,7 @@ def check_and_reconnect(connection):
         if connection and connection.is_connected():
             print("Database connection is active")
             return connection
-        print("Attempting to connect to database...")
+        print(f"Attempting to connect to database with host: {DB_CONFIG['host']}, user: {DB_CONFIG['user']}, database: {DB_CONFIG['database']}")
         new_connection = mysql.connector.connect(**DB_CONFIG)
         print("Successfully connected to database")
         return new_connection
@@ -139,22 +139,22 @@ def check_and_reconnect(connection):
 
 def insert_news(connection, cat_id, news_title, news_description, news_image):
     current_date = datetime.now().strftime('%d %B %Y')
-    news_image_filename = f"{current_date}.png"  # Match working code
+    news_image_filename = f"{current_date}.png"
     query = """
     INSERT INTO tbl_news (cat_id, news_title, news_date, news_description, news_image, 
                          news_status, video_url, video_id, content_type, size, view_count, last_update)
     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
-    current_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')  # Fixed typo
+    current_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     data = (
         cat_id, news_title, current_timestamp, news_description, news_image_filename,
-        1, "", "", "Post", "", 0, current_timestamp  # Match working code view_count=0
+        1, "", "", "Post", "", 0, current_timestamp
     )
     
     try:
         connection = check_and_reconnect(connection)
         if connection:
-            print("Executing database insertion...")
+            print(f"Attempting to insert news: {news_title[:50]}... (ID will be generated)")
             cursor = connection.cursor()
             cursor.execute(query, data)
             connection.commit()
@@ -163,7 +163,7 @@ def insert_news(connection, cat_id, news_title, news_description, news_image):
             print(f"News inserted successfully with ID: {news_id}")
             return True, news_id
         else:
-            print("No database connection available")
+            print("No database connection available, insertion skipped")
             return False, None
     except mysql.connector.Error as err:
         print(f"Database insertion failed: {err}")
@@ -236,54 +236,68 @@ class CurrentAffairsScraper:
                 soup = BeautifulSoup(response.content, 'html.parser')
                 articles = soup.find_all('h1', id='list')
                 urls = [a.find('a')['href'] for a in articles if a.find('a')]
+                print(f"Found {len(urls)} URLs on page: {page_url}")
                 if self.mongodb_collection is not None:
                     new_urls = [url for url in urls if not is_url_scraped(self.mongodb_collection, url)]
+                    print(f"After filtering, {len(new_urls)} new URLs remain on {page_url}")
                     return new_urls
                 return urls
             except requests.RequestException:
                 if attempt < max_retries - 1:
                     time.sleep(retry_delay)
                 else:
+                    print(f"Failed to fetch URLs from {page_url} after {max_retries} attempts")
                     return []
             except Exception:
+                print(f"Unexpected error fetching URLs from {page_url}")
                 return []
 
     def extract_content(self, article_urls):
         articles_data = []
         total_urls = len(article_urls)
+        print(f"Starting to process {total_urls} article URLs")
         
         for index, article_url in enumerate(article_urls, 1):
             try:
+                print(f"Processing article {index}/{total_urls}: {article_url}")
                 response = self.requests.get(article_url)
                 soup = BeautifulSoup(response.content, 'html.parser')
                 featured_image_section = soup.find('div', class_='featured_image', style='margin-bottom:-5px;')
                 
                 if not featured_image_section:
+                    print(f"No featured image section found in {article_url}, skipping")
                     continue
                 
                 title_element = soup.find('h1', id='list', style="text-align:center; font-size:20px;")
                 if not title_element:
+                    print(f"No title found in {article_url}, skipping")
                     continue
                     
                 original_title = self.clean_text(title_element.text)
                 content_element = featured_image_section.find_next('p')
                 if not content_element:
+                    print(f"No content found in {article_url}, skipping")
                     continue
                     
                 original_paragraph = self.clean_text(content_element.text)
                 title_success, gujarati_title = self.safe_translate(original_title, is_title=True)
                 if not title_success:
+                    print(f"Failed to translate title for {article_url}, skipping")
                     continue
                 
                 para_success, gujarati_paragraph = self.safe_translate(original_paragraph)
                 if not para_success:
+                    print(f"Failed to translate paragraph for {article_url}, skipping")
                     continue
                 
                 articles_data.append((original_title, original_paragraph, gujarati_title, gujarati_paragraph))
                 log_url_to_mongodb(self.mongodb_collection, article_url, status="scraped")
+                print(f"Successfully processed article {index}/{total_urls}")
                 time.sleep(1)
-            except Exception:
+            except Exception as e:
+                print(f"Failed to process {article_url}: {e}")
                 continue
+        print(f"Finished processing {len(articles_data)} articles out of {total_urls}")
         return articles_data
 
     def format_news_content(self, articles_data):
@@ -452,6 +466,7 @@ class CurrentAffairsScraper:
                 page_number += 1
                 time.sleep(1)
             
+            print(f"Total unique URLs collected: {len(all_urls)}")
             if all_urls:
                 articles_data = self.extract_content(all_urls)
                 
