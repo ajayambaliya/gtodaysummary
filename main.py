@@ -158,7 +158,7 @@ def insert_news(connection, cat_id, news_title, news_description, news_image):
     current_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     data = (
         cat_id, news_title, current_timestamp, news_description, news_image_filename,
-        11, "", "", "Post", "", 0, current_timestamp
+        1, "", "", "Post", "", 0, current_timestamp
     )
     
     try:
