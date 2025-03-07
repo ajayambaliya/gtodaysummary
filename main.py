@@ -147,6 +147,7 @@ def check_and_reconnect(connection):
         return None
 
 def insert_news(connection, cat_id, news_title, news_description, news_image):
+    cat_id = 11
     current_date = datetime.now().strftime('%d %B %Y')
     news_image_filename = f"{current_date} Summary.jpg"
     query = """
