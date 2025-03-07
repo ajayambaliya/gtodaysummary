@@ -179,7 +179,7 @@ def log_url_to_mongodb(collection, url, status="scraped"):
             document = {
                 "url": url,
                 "status": status,
-                "timestamp": datetime.now(UTC)
+                "timestamp": datetime.now(timezone.utc)
             }
             collection.insert_one(document)
             logging.info(f"Logged URL to MongoDB: {url} with status {status}")
