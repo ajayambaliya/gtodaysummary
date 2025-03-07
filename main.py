@@ -2,6 +2,7 @@ import os
 import re
 import requests
 import mysql.connector
+import logging
 import time
 import random
 import json
@@ -58,7 +59,7 @@ def initialize_firebase():
 # Send Firebase notification
 def send_firebase_notification(news_title, post_id):
     current_date = datetime.now().strftime('%d %b')
-    base_title = f"{current_date} CA Summary"
+    base_title = f"{current_date} Summary.jpg"
     
     catchy_phrases = [
         " - Hot Updates Await!",
@@ -126,30 +127,34 @@ class RequestsWithRetry:
 def check_and_reconnect(connection):
     try:
         if connection and connection.is_connected():
+            print("Database connection is active")
             return connection
-        print("Connecting to database...")
-        return mysql.connector.connect(**DB_CONFIG)
+        print("Attempting to connect to database...")
+        new_connection = mysql.connector.connect(**DB_CONFIG)
+        print("Successfully connected to database")
+        return new_connection
     except Error as e:
-        print(f"Database connection error: {e}")
+        print(f"Database connection failed: {e}")
         return None
 
 def insert_news(connection, cat_id, news_title, news_description, news_image):
     current_date = datetime.now().strftime('%d %B %Y')
-    news_image_filename = f"{current_date} Summary.jpg"
+    news_image_filename = f"{current_date}.png"  # Match working code
     query = """
     INSERT INTO tbl_news (cat_id, news_title, news_date, news_description, news_image, 
                          news_status, video_url, video_id, content_type, size, view_count, last_update)
     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
-    current_timestamp = datetime.now().strftime('%Y-%m-d %H:%M:%S')
+    current_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')  # Fixed typo
     data = (
         cat_id, news_title, current_timestamp, news_description, news_image_filename,
-        1, "", "", "Post", "", 11, current_timestamp
+        1, "", "", "Post", "", 0, current_timestamp  # Match working code view_count=0
     )
     
     try:
         connection = check_and_reconnect(connection)
         if connection:
+            print("Executing database insertion...")
             cursor = connection.cursor()
             cursor.execute(query, data)
             connection.commit()
@@ -475,5 +480,6 @@ class CurrentAffairsScraper:
                 print("Database connection closed")
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     scraper = CurrentAffairsScraper()
     scraper.main()
