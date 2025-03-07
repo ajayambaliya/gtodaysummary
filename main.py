@@ -10,7 +10,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from mysql.connector import Error
 from bs4 import BeautifulSoup
-from datetime import datetime, UTC
+from datetime import datetime, timezone  # Changed import
 from deep_translator import GoogleTranslator, MyMemoryTranslator
 from googletrans import Translator
 import firebase_admin
@@ -189,7 +189,7 @@ def log_url_to_mongodb(collection, url, status="scraped"):
             document = {
                 "url": url,
                 "status": status,
-                "timestamp": datetime.now(UTC)
+                "timestamp": datetime.now(timezone.utc)  # Fixed to timezone.utc
             }
             collection.insert_one(document)
             logging.info(f"Logged URL to MongoDB: {url} with status {status}")
