@@ -2,7 +2,6 @@ import os
 import re
 import requests
 import mysql.connector
-import logging
 import time
 import random
 import json
@@ -23,7 +22,6 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # MongoDB setup
 def initialize_mongodb():
-    """Initialize MongoDB connection."""
     try:
         mongo_uri = os.getenv('MONGO_URI')
         if not mongo_uri:
@@ -32,25 +30,18 @@ def initialize_mongodb():
         client.admin.command('ping')
         db = client['current_affairs_db']
         collection = db['scraped_urls']
-        logging.info("MongoDB initialized successfully")
         return collection
-    except ConnectionFailure as e:
-        logging.error(f"MongoDB connection failed: {e}")
-        return None
-    except Exception as e:
-        logging.error(f"MongoDB initialization error: {e}")
+    except (ConnectionFailure, Exception):
         return None
 
 # Firebase initialization
 def initialize_firebase():
-    """Initialize Firebase with credentials from environment variable or file."""
     try:
         service_account_json = os.getenv('FIREBASE_SERVICE_ACCOUNT_JSON')
         if service_account_json:
             cred_dict = json.loads(service_account_json)
             cred = credentials.Certificate(cred_dict)
             firebase_admin.initialize_app(cred)
-            logging.info("Firebase initialized with service account JSON from environment")
             return True
 
         service_account_path = os.getenv('FIREBASE_SERVICE_ACCOUNT_PATH', 'service-account.json')
@@ -58,12 +49,10 @@ def initialize_firebase():
         if os.path.exists(path):
             cred = credentials.Certificate(path)
             firebase_admin.initialize_app(cred)
-            logging.info(f"Firebase initialized with service account at: {path}")
             return True
 
-        raise ValueError("No valid Firebase credentials found. Set FIREBASE_SERVICE_ACCOUNT_JSON or provide service-account.json.")
-    except Exception as e:
-        logging.error(f"Firebase initialization error: {e}")
+        raise ValueError("No valid Firebase credentials found.")
+    except Exception:
         return False
 
 # Send Firebase notification
@@ -103,10 +92,10 @@ def send_firebase_notification(news_title, post_id):
             topic=topic
         )
         response = messaging.send(message)
-        logging.info(f"Notification sent successfully. Message ID: {response}")
+        print(f"Notification sent successfully. Message ID: {response}")
         return True
     except Exception as e:
-        logging.error(f"Failed to send notification: {e}")
+        print(f"Failed to send notification: {e}")
         return False
 
 # Database configuration
@@ -138,9 +127,10 @@ def check_and_reconnect(connection):
     try:
         if connection and connection.is_connected():
             return connection
+        print("Connecting to database...")
         return mysql.connector.connect(**DB_CONFIG)
     except Error as e:
-        logging.error(f"Connection error: {e}")
+        print(f"Database connection error: {e}")
         return None
 
 def insert_news(connection, cat_id, news_title, news_description, news_image):
@@ -151,7 +141,7 @@ def insert_news(connection, cat_id, news_title, news_description, news_image):
                          news_status, video_url, video_id, content_type, size, view_count, last_update)
     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
-    current_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    current_timestamp = datetime.now().strftime('%Y-%m-d %H:%M:%S')
     data = (
         cat_id, news_title, current_timestamp, news_description, news_image_filename,
         1, "", "", "Post", "", 11, current_timestamp
@@ -165,14 +155,21 @@ def insert_news(connection, cat_id, news_title, news_description, news_image):
             connection.commit()
             news_id = cursor.lastrowid
             cursor.close()
+            print(f"News inserted successfully with ID: {news_id}")
             return True, news_id
-        return False, None
+        else:
+            print("No database connection available")
+            return False, None
     except mysql.connector.Error as err:
-        logging.error(f"Database error: {err}")
+        print(f"Database insertion failed: {err}")
+        print(f"Query: {query}")
+        print(f"Data: {data}")
+        return False, None
+    except Exception as e:
+        print(f"Unexpected error during insertion: {e}")
         return False, None
 
 def log_url_to_mongodb(collection, url, status="scraped"):
-    """Log URL to MongoDB with status and timestamp."""
     try:
         if collection is not None:
             document = {
@@ -181,20 +178,16 @@ def log_url_to_mongodb(collection, url, status="scraped"):
                 "timestamp": datetime.now(timezone.utc)
             }
             collection.insert_one(document)
-            logging.info(f"Logged URL to MongoDB: {url} with status {status}")
-    except Exception as e:
-        logging.error(f"Failed to log URL to MongoDB: {e}")
+    except Exception:
+        pass
 
 def is_url_scraped(collection, url):
-    """Check if URL has been scraped before."""
     try:
         if collection is not None:
             result = collection.find_one({"url": url})
-            logging.debug(f"Checking URL {url} in MongoDB: {'Found' if result else 'Not found'}")
             return result is not None
         return False
-    except Exception as e:
-        logging.error(f"Error checking URL in MongoDB: {e}")
+    except Exception:
         return False
 
 class CurrentAffairsScraper:
@@ -205,10 +198,7 @@ class CurrentAffairsScraper:
         self.translation_retries = 3
         self.retry_delay = 1
         self.mongodb_collection = initialize_mongodb()
-        if not initialize_firebase():
-            logging.error("Firebase initialization failed. Notifications will not be sent.")
-        if self.mongodb_collection is None:
-            logging.error("MongoDB initialization failed. Duplicate checking will be disabled.")
+        initialize_firebase()
 
     def clean_text(self, text):
         return re.sub(r'\s+', ' ', text).strip()
@@ -227,10 +217,8 @@ class CurrentAffairsScraper:
                         translator = Translator()
                         translated_text = translator.translate(text, src='en', dest='gu').text
                         return True, translated_text
-                    except Exception as e:
-                        logging.warning(f"Translation attempt {attempt + 1} failed: {e}")
+                    except Exception:
                         time.sleep(self.retry_delay)
-        logging.error(f"Translation failed after {self.translation_retries} attempts")
         return False, ""
 
     def get_article_urls(self, page_url):
@@ -238,29 +226,21 @@ class CurrentAffairsScraper:
         retry_delay = 3
         for attempt in range(max_retries):
             try:
-                logging.debug(f"Fetching URL: {page_url}")
                 response = self.requests.get(page_url)
                 response.raise_for_status()
                 soup = BeautifulSoup(response.content, 'html.parser')
-                articles = soup.find_all('h1', id='list')  # Reverted to old working method
+                articles = soup.find_all('h1', id='list')
                 urls = [a.find('a')['href'] for a in articles if a.find('a')]
-                logging.debug(f"Raw URLs found on {page_url}: {urls}")
-                
-                # Filter out already scraped URLs
                 if self.mongodb_collection is not None:
                     new_urls = [url for url in urls if not is_url_scraped(self.mongodb_collection, url)]
-                    logging.info(f"After filtering, {len(new_urls)} new URLs remain on {page_url}: {new_urls}")
                     return new_urls
                 return urls
-            except requests.RequestException as e:
+            except requests.RequestException:
                 if attempt < max_retries - 1:
-                    logging.warning(f"Attempt {attempt + 1} failed for {page_url}: {e}")
                     time.sleep(retry_delay)
                 else:
-                    logging.error(f"Failed to fetch URLs after {max_retries} attempts: {e}")
                     return []
-            except Exception as e:
-                logging.error(f"Unexpected error fetching {page_url}: {e}")
+            except Exception:
                 return []
 
     def extract_content(self, article_urls):
@@ -268,44 +248,36 @@ class CurrentAffairsScraper:
         total_urls = len(article_urls)
         
         for index, article_url in enumerate(article_urls, 1):
-            logging.info(f"Processing article {index}/{total_urls}: {article_url}")
             try:
                 response = self.requests.get(article_url)
                 soup = BeautifulSoup(response.content, 'html.parser')
                 featured_image_section = soup.find('div', class_='featured_image', style='margin-bottom:-5px;')
                 
                 if not featured_image_section:
-                    logging.warning(f"No featured image section found in {article_url}")
                     continue
                 
                 title_element = soup.find('h1', id='list', style="text-align:center; font-size:20px;")
                 if not title_element:
-                    logging.warning(f"No title found in {article_url}")
                     continue
                     
                 original_title = self.clean_text(title_element.text)
                 content_element = featured_image_section.find_next('p')
                 if not content_element:
-                    logging.warning(f"No content found in {article_url}")
                     continue
                     
                 original_paragraph = self.clean_text(content_element.text)
                 title_success, gujarati_title = self.safe_translate(original_title, is_title=True)
                 if not title_success:
-                    logging.error(f"Failed to translate title for article {index}")
                     continue
                 
                 para_success, gujarati_paragraph = self.safe_translate(original_paragraph)
                 if not para_success:
-                    logging.error(f"Failed to translate paragraph for article {index}")
                     continue
                 
                 articles_data.append((original_title, original_paragraph, gujarati_title, gujarati_paragraph))
                 log_url_to_mongodb(self.mongodb_collection, article_url, status="scraped")
-                logging.info(f"Successfully processed article {index}/{total_urls}")
                 time.sleep(1)
-            except Exception as e:
-                logging.error(f"Failed to process {article_url}: {e}")
+            except Exception:
                 continue
         return articles_data
 
@@ -346,14 +318,12 @@ class CurrentAffairsScraper:
         return """
         <style>
             @import url('https://fonts.googleapis.com/css2?family=Hind+Vadodara:wght@300;400;500;600;700&display=swap');
-            
             * {
                 margin: 0;
                 padding: 0;
                 box-sizing: border-box;
                 font-family: 'Hind Vadodara', sans-serif;
             }
-            
             .date-header {
                 text-align: center;
                 padding: 1rem;
@@ -362,7 +332,6 @@ class CurrentAffairsScraper:
                 background: linear-gradient(135deg, #ff6b6b, #4ecdc4);
                 border-radius: 10px 10px 0 0;
             }
-            
             .news-container {
                 max-width: 1200px;
                 margin: 0 auto;
@@ -370,7 +339,6 @@ class CurrentAffairsScraper:
                 background: #f0f4f8;
                 border-radius: 0 0 10px 10px;
             }
-            
             .header {
                 text-align: center;
                 padding: 1.5rem;
@@ -380,12 +348,10 @@ class CurrentAffairsScraper:
                 border-radius: 8px;
                 box-shadow: 0 4px 15px rgba(0,0,0,0.2);
             }
-            
             .header h1 {
                 font-size: 2rem;
                 font-weight: 600;
             }
-            
             .news-card {
                 background: #fff;
                 border-radius: 12px;
@@ -396,12 +362,10 @@ class CurrentAffairsScraper:
                 position: relative;
                 overflow: hidden;
             }
-            
             .news-card:hover {
                 transform: translateY(-5px);
                 box-shadow: 0 8px 25px rgba(0,0,0,0.15);
             }
-            
             .topic-number {
                 position: absolute;
                 top: 10px;
@@ -413,24 +377,20 @@ class CurrentAffairsScraper:
                 font-size: 1rem;
                 font-weight: 500;
             }
-            
             .content-wrapper {
                 display: grid;
                 grid-template-columns: 1fr 1fr;
                 gap: 1.5rem;
                 margin-top: 2rem;
             }
-            
             .lang-section {
                 padding: 1rem;
                 border-radius: 8px;
                 background: #f8fafc;
                 transition: all 0.3s ease;
             }
-            
             .english { border-left: 5px solid #3498db; }
             .gujarati { border-left: 5px solid #e74c3c; }
-            
             .lang-label {
                 display: inline-block;
                 font-size: 1rem;
@@ -441,7 +401,6 @@ class CurrentAffairsScraper:
                 border-radius: 15px;
                 margin-bottom: 0.8rem;
             }
-            
             .lang-section h2 {
                 font-size: 1.3rem;
                 color: #2c3e50;
@@ -449,26 +408,22 @@ class CurrentAffairsScraper:
                 font-weight: 600;
                 line-height: 1.3;
             }
-            
             .lang-section p {
                 font-size: 1rem;
                 color: #34495e;
                 line-height: 1.6;
             }
-            
             @media (max-width: 768px) {
                 .content-wrapper {
                     grid-template-columns: 1fr;
                     gap: 1rem;
                 }
-                
                 .header h1 { font-size: 1.5rem; }
                 .date-header { font-size: 1.2rem; }
                 .lang-section h2 { font-size: 1.1rem; }
                 .lang-section p { font-size: 0.95rem; }
                 .news-card { padding: 1rem; }
             }
-            
             @media (max-width: 480px) {
                 .news-container { padding: 0.5rem; }
                 .header { padding: 1rem; }
@@ -487,14 +442,12 @@ class CurrentAffairsScraper:
             while page_number <= max_pages:
                 page_url = f"{base_url}page/{page_number}/"
                 article_urls = self.get_article_urls(page_url)
-                logging.info(f"Processed page {page_number}/{max_pages}")
                 if article_urls:
                     all_urls.extend(article_urls)
                 page_number += 1
                 time.sleep(1)
             
             if all_urls:
-                logging.info(f"Found {len(all_urls)} articles to process")
                 articles_data = self.extract_content(all_urls)
                 
                 if articles_data and len(articles_data) >= 3:
@@ -511,30 +464,16 @@ class CurrentAffairsScraper:
                     )
                     
                     if success:
-                        logging.info(f"Successfully created post for {current_date} with ID: {news_id}")
-                        if send_firebase_notification(news_title, news_id):
-                            logging.info("Notification sent successfully")
-                            for url in all_urls:
-                                log_url_to_mongodb(self.mongodb_collection, url, status="sent")
-                        else:
-                            logging.warning("Notification failed to send")
-                    else:
-                        logging.error(f"Failed to create post for {current_date}")
-                else:
-                    logging.error("Insufficient translated articles")
-            else:
-                logging.warning("No new articles found to process across all pages")
-                
+                        send_firebase_notification(news_title, news_id)
+                        for url in all_urls:
+                            log_url_to_mongodb(self.mongodb_collection, url, status="sent")
         except Exception as e:
-            logging.error(f"Main execution error: {e}")
+            print(f"Main execution error: {e}")
         finally:
             if self.connection:
                 self.connection.close()
+                print("Database connection closed")
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.DEBUG,  # Keep DEBUG level for troubleshooting
-        format='%(asctime)s - %(levelname)s - %(message)s'
-    )
     scraper = CurrentAffairsScraper()
     scraper.main()
